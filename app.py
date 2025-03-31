@@ -33,12 +33,25 @@ warnings.filterwarnings("ignore", message=".*TokenCalcHandler.*")
 warnings.filterwarnings("ignore", message=".*extra_headers is not default parameter.*")
 warnings.filterwarnings("ignore", message=".*The method `BaseTool.__call__` was deprecated.*")
 
-# Set up API keys
-OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "4ad432a816fb1ab0e83d962d52909803")
-GEMINI_API_KEY = st.secrets.get("google", {}).get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", ""))
+# Update the environment setup section
+try:
+    # Try getting variables from Streamlit secrets first
+    OPENWEATHER_API_KEY = st.secrets["OPENWEATHER_API_KEY"]
+    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+    LLM_MODE = st.secrets.get("LLM_MODE", "google")
+except Exception as e:
+    # Fall back to local .env if not in Streamlit Cloud
+    load_dotenv()
+    OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+    LLM_MODE = os.getenv("LLM_MODE", "google")
 
-# Define the LLM mode - options: "google", "local"
-LLM_MODE = st.secrets.get("general", {}).get("LLM_MODE", os.getenv("LLM_MODE", "google")).lower()
+# Remove any hardcoded API keys
+if not OPENWEATHER_API_KEY:
+    st.error("OpenWeather API key not found. Please configure it in your environment.")
+
+if not GEMINI_API_KEY:
+    st.error("Gemini API key not found. Please configure it in your environment.")
 
 # Define base URLs and model info
 LOCAL_API_BASE = os.getenv("OPENAI_API_BASE", "http://localhost:11434/v1")
@@ -232,16 +245,20 @@ def search_tool(query: str) -> str:
 
 # Custom tool for weather information with improved error handling
 @tool
-def get_weather(location, date=None):
-    """Get weather information for a location. If date is not provided, current weather is returned."""
+def get_weather(location):
+    """Get weather information for a location."""
     try:
-        # Clean up location name
+        if not OPENWEATHER_API_KEY:
+            return "Weather information is currently unavailable. Please try again later."
+            
+        # Clean up location name - remove "In" prefix if present
+        location = location.replace("In ", "").replace("in ", "")
         location = location.split(' Is A Great Choice')[0].strip()
-        location = location.split(' For')[0].strip()  # Remove 'For' suffix
+        location = location.split(' For')[0].strip()
         
         if not location:
             return "Please specify a city name to get weather information."
-        
+            
         # Check if date is in the future but within 5 days
         future_date = False
         if date:
@@ -1419,7 +1436,7 @@ def generate_response(prompt, travel_info):
                        "3. Popular attractions\n" + \
                        "4. Restaurant recommendations\n" + \
                        "5. A complete day-by-day itinerary\n\n" + \
-                       "Just let me know what interests you!"
+                       "Please choose a number or ask about any specific aspect!"
             else:
                 return "Where would you like to travel to? I can help you plan your trip!"
         
@@ -1436,7 +1453,7 @@ def generate_response(prompt, travel_info):
                    "3. Popular attractions\n" + \
                    "4. Restaurant recommendations\n" + \
                    "5. A complete day-by-day itinerary\n\n" + \
-                   "Just let me know what interests you!"
+                   "Please choose a number or ask about any specific aspect!"
         else:
             return "Where would you like to travel to? I can help you plan your trip!"
             

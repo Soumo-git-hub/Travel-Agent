@@ -2,18 +2,7 @@
 
 This document provides step-by-step instructions for deploying the AI Travel Agent application to a Streamlit deployment platform.
 
-## Prerequisites
-
-Before deploying the application, ensure you have:
-
-- A GitHub account
-- Your API keys ready:
-  - OpenAI API key (recommended) or setup for local model use
-  - SerpAPI key (optional but recommended for better search results)
-  - OpenWeather API key (for weather information)
-
 ## Local Setup and Testing
-
 ### Step 1: Clone the Repository
 
 ```bash
@@ -164,4 +153,4 @@ If you encounter any deployment issues, please:
 1. Check the troubleshooting section above
 2. Review the logs in your deployment platform's dashboard
 3. Consult the documentation for your specific deployment platform
-4. Reach out to the repository maintainer 
+4. Reach out to the repository maintainer
