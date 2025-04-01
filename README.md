@@ -1,71 +1,140 @@
 # AI Travel Agent
 
-An intelligent travel assistant powered by AI that helps users plan trips, find destinations, and create personalized itineraries based on preferences, budget, and travel dates.
+An intelligent travel planning assistant powered by AI that helps users create personalized travel itineraries. The app uses advanced language models and real-time data to provide comprehensive travel recommendations.
 
 ## Table of Contents
-- [Demo](#demo)
-- [Overview](#overview)
-- [Technologies Used](#technologies-used)
 - [Features](#features)
-- [Setup & Installation](#setup--installation)
-- [API Keys Required](#api-keys-required)
+- [Technologies Used](#technologies-used)
+- [Setup](#setup)
+- [Running Locally](#running-locally)
 - [Usage](#usage)
+- [Project Structure](#project-structure)
 - [Contributing](#contributing)
 - [License](#license)
-
-## Demo
-
-Experience the application live at: [AI Travel Agent Demo](https://soumo-travel-agent-app.streamlit.app)
-
-## Overview
-
-This AI-powered travel assistant uses natural language processing to understand your travel needs and preferences. It can recommend destinations, create detailed itineraries, provide weather forecasts, suggest activities, and offer budget-friendly options for your next adventure.
-
-## Technologies Used
-
-- **Streamlit**: For creating the interactive web interface and cloud deployment
-- **LangChain**: For LLM tools integration, workflow management, and agent orchestration
-- **OpenAI/Ollama**: For advanced natural language processing and understanding
-- **SerpAPI/DuckDuckGo**: For real-time web search capabilities and up-to-date travel information
-- **OpenWeather API**: For accurate weather forecasts at destinations
-- **Python**: Core programming language for backend logic and data processing
+- [Acknowledgments](#acknowledgments)
 
 ## Features
 
-- **Personalized Travel Recommendations**: Get destination suggestions based on your interests
-- **Intelligent Itinerary Planning**: Create optimized day-by-day travel plans
-- **Real-time Weather Information**: Access current and forecasted weather for better planning
-- **Budget-conscious Options**: Find accommodations and activities that match your budget
-- **Cultural Insights**: Learn about local customs, traditions, and must-see attractions
-- **Interactive Chat Interface**: Communicate naturally with the AI assistant
-- **Multi-modal Responses**: Receive information in text, lists, and structured formats
+- 🤖 **AI-Powered Chat Interface**
+  - Natural language interaction for travel planning
+  - Context-aware responses and recommendations
+  - Support for both Google Gemini and local LLM models
 
-## Setup & Installation
+- 📋 **Smart Itinerary Generation**
+  - Personalized day-by-day travel plans
+  - Activity recommendations based on interests
+  - Flexible scheduling and customization
 
-1. Clone this repository:  `git clone https://github.com/Soumo-git-hub/Travel-Agent.git`
-2. Navigate to the project directory: `cd Travel-Agent`
-3. Install dependencies: `pip install -r requirements.txt`
-4. Create a `.env` file with API keys (use `.env.template` as reference)
-5. Run the application: `streamlit run app.py`
+- 🌤️ **Real-time Weather Information**
+  - Current weather conditions
+  - Temperature, humidity, and wind speed
+  - Weather alerts and travel advice
 
-## API Keys Required
+- 🍽️ **Dining & Attractions**
+  - Restaurant recommendations with dietary preferences
+  - Top attractions and points of interest
+  - Special interest activities and experiences
 
-- **OpenAI API Key** (recommended) or use local Ollama for LLM functionality
-- **SerpAPI Key** (optional but recommended for better search results)
-- **OpenWeather API Key** (for weather information)
+- 💰 **Budget Planning**
+  - Cost estimates for accommodations, food, and activities
+  - Money-saving tips and recommendations
+  - Budget level customization (low, moderate, high)
+
+- ♿ **Accessibility Information**
+  - Wheelchair-accessible attractions
+  - Special needs accommodations
+  - Travel tips for accessibility
+
+- 🌍 **Location-Specific Features**
+  - Local customs and etiquette
+  - Transportation options
+  - Cultural insights and recommendations
+
+## Technologies Used
+
+- **Frontend**: Streamlit
+- **AI/ML**: 
+  - Google Gemini Pro
+  - LangChain
+  - Local LLM support (Ollama)
+- **APIs**: 
+  - OpenWeather API
+  - Web Search Integration
+- **Data Processing**: BeautifulSoup4, Requests
+
+## Setup
+
+1. Clone the repository:
+```bash
+git clone https://github.com/Soumo-git-hub/Travel-Agent.git
+
+cd travel-agent
+```
+
+2. Create a virtual environment and activate it:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+4. Create a `.env` file with your API keys:
+```
+OPENWEATHER_API_KEY=your_openweather_api_key
+GEMINI_API_KEY=your_gemini_api_key
+LLM_MODE=google  # or 'local' for local LLM
+```
+
+## Running Locally
+
+1. Start the Streamlit app:
+```bash
+streamlit run app.py
+```
+
+2. Open your browser and navigate to `http://localhost:8501`
 
 ## Usage
 
-The application can be run in two modes:
-- **Streamlit UI**: `python -m streamlit run app.py` - For interactive web interface
-- **API Server**: `python run_server.py --mode api` - For headless operation or integration with other services
+1. Start a new chat by clicking the "Start New Chat" button
+2. Tell the AI where you want to travel
+3. Provide additional information like:
+   - Duration of stay
+   - Budget level
+   - Interests and preferences
+   - Any special requirements
+4. The AI will generate a personalized itinerary
+5. Ask follow-up questions about specific aspects of your trip
+6. Download your itinerary as a markdown file
+
+## Project Structure
+
+```
+travel-agent/
+├── .streamlit/
+│   └── config.toml      # Streamlit configuration
+├── app.py              # Main application file
+├── requirements.txt    # Python dependencies
+├── README.md          # Project documentation
+├── LICENSE            # MIT License
+└── .gitignore         # Git ignore rules
+```
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
 
 ## License
 
-MIT License - Copyright (c) 2023 Soumyadyuti Dey
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files, to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software.
+## Acknowledgments
+
+- Google Gemini for AI capabilities
+- OpenWeather for weather data
+- Streamlit for the web framework
+- All contributors and users of the project

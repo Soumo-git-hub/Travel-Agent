@@ -17,6 +17,41 @@ import time
 from bs4 import BeautifulSoup
 import random
 
+# Set page configuration
+st.set_page_config(
+    page_title="Travel Agent",
+    page_icon="✈️",
+    layout="wide"
+)
+
+# Custom CSS for loading animation
+st.markdown("""
+<style>
+.loading-dots {
+    display: none;  /* Hidden by default */
+    color: #2ecc71;  /* Green color */
+    font-weight: 500;  /* Medium weight */
+    font-size: 1.1em;  /* Slightly larger text */
+    padding: 8px 12px;  /* Add padding */
+    background-color: rgba(46, 204, 113, 0.1);  /* Light green background */
+    border-radius: 4px;  /* Rounded corners */
+    margin: 4px 0;  /* Add margin */
+    white-space: nowrap;  /* Prevent text wrapping */
+}
+.loading-dots::after {
+    content: '...';
+    animation: dots 1.4s infinite;
+    display: inline-block;
+}
+@keyframes dots {
+    0%, 20% { content: '.'; }
+    40% { content: '..'; }
+    60% { content: '...'; }
+    80%, 100% { content: ''; }
+}
+</style>
+""", unsafe_allow_html=True)
+
 # Import Streamlit config handler
 try:
     from streamlit_config import setup_streamlit_secrets
@@ -144,7 +179,7 @@ llm = setup_llm()
 
 # Define the search function with improved error handling and rate limiting
 def search_web(query, num_results=5, timeout=15):
-    """Perform a web search and return structured results"""
+    """Perform a web search and return structured results with improved robustness"""
     if not query or not query.strip():
         return []
         
@@ -154,70 +189,120 @@ def search_web(query, num_results=5, timeout=15):
         user_agents = [
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Safari/605.1.15',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36'
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         ]
         
-        # Use a simple cache mechanism to avoid duplicate searches
+        # Use an improved cache mechanism with expiration
         if "search_cache" not in st.session_state:
             st.session_state.search_cache = {}
+        if "search_cache_timestamps" not in st.session_state:
+            st.session_state.search_cache_timestamps = {}
         
-        # Check cache first
+        # Check cache with expiration (5 minutes)
         cache_key = f"{query}_{num_results}"
+        current_time = time.time()
         if cache_key in st.session_state.search_cache:
-            print("Using cached search result")
-            return st.session_state.search_cache[cache_key]
+            cache_age = current_time - st.session_state.search_cache_timestamps.get(cache_key, 0)
+            if cache_age < 300:  # 5 minutes expiration
+                print("Using cached search result")
+                return st.session_state.search_cache[cache_key]
         
         # Perform the search with the correct parameters
-        search_urls = list(search(query, num_results=num_results))
+        search_urls = list(search(query, num_results=num_results * 2))  # Get more results to filter
         
         for url in search_urls:
             try:
                 # Get the webpage content with increased timeout and rotating user agents
-                headers = {'User-Agent': random.choice(user_agents)}
-                response = requests.get(url, timeout=timeout, headers=headers)
+                headers = {
+                    'User-Agent': random.choice(user_agents),
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1'
+                }
+                
+                # Add retry mechanism
+                max_retries = 3
+                for retry in range(max_retries):
+                    try:
+                        response = requests.get(url, timeout=timeout, headers=headers)
+                        if response.status_code == 200:
+                            break
+                        elif response.status_code == 429:  # Too Many Requests
+                            if retry < max_retries - 1:
+                                time.sleep(random.uniform(2, 5))
+                                continue
+                    except requests.Timeout:
+                        if retry < max_retries - 1:
+                            time.sleep(random.uniform(1, 3))
+                            continue
+                        raise
                 
                 if response.status_code == 200:
                     soup = BeautifulSoup(response.text, 'html.parser')
                     
-                    # Get title
+                    # Get title with improved cleaning
                     title = soup.title.string if soup.title else url
                     title = re.sub(r'\s*\|.*$', '', title)  # Remove website name
                     title = re.sub(r'\s*-\s*.*$', '', title)  # Remove separator and rest
+                    title = re.sub(r'\s+', ' ', title).strip()  # Clean up whitespace
                     
-                    # Get description
+                    # Get description with improved extraction
                     description = ""
                     meta_desc = soup.find('meta', attrs={'name': 'description'})
                     if meta_desc:
                         description = meta_desc.get('content', '')
                     else:
-                        # Try to get first paragraph
-                        p = soup.find('p')
-                        if p:
-                            description = p.text[:200] + "..."
+                        # Try multiple methods to get description
+                        for tag in ['p', 'div']:
+                            for element in soup.find_all(tag, class_=lambda x: x and ('description' in x.lower() or 'summary' in x.lower())):
+                                description = element.text.strip()
+                                if len(description) > 50:  # Ensure meaningful content
+                                    break
+                            if description:
+                                break
+                        
+                        if not description:
+                            # Get first meaningful paragraph
+                            for p in soup.find_all('p'):
+                                text = p.text.strip()
+                                if len(text) > 50 and not any(x in text.lower() for x in ['copyright', 'all rights reserved', 'privacy policy']):
+                                    description = text[:200] + "..."
+                                    break
                     
-                    # Clean up description
+                    # Clean up description with improved filtering
                     description = re.sub(r'Visit.*?\.com', '', description, flags=re.IGNORECASE)
                     description = re.sub(r'https?://.*$', '', description)
                     description = re.sub(r'www\..*$', '', description)
+                    description = re.sub(r'\s+', ' ', description).strip()
                     
-                    if title and description and len(title) > 5:
+                    # Additional quality checks
+                    if (title and description and 
+                        len(title) > 5 and 
+                        len(description) > 20 and
+                        not any(x in url.lower() for x in ['advertisement', 'sponsored', 'promoted'])):
                         search_results.append({
-                            'title': title.strip(),
+                            'title': title,
                             'url': url,
-                            'description': description.strip()
+                            'description': description
                         })
-            except requests.Timeout:
-                print(f"Timeout while processing URL {url}")
-                continue
+                        
+                        if len(search_results) >= num_results:
+                            break
+                            
             except Exception as e:
                 print(f"Error processing URL {url}: {str(e)}")
                 continue
             
-            # Add a small delay to avoid rate limiting
-            time.sleep(random.uniform(1.5, 2.5))  # Randomized delay between 1.5-2.5 seconds
+            # Add a randomized delay to avoid rate limiting
+            time.sleep(random.uniform(1.5, 3.0))
         
-        # Cache the result
+        # Cache the result with timestamp
         st.session_state.search_cache[cache_key] = search_results
+        st.session_state.search_cache_timestamps[cache_key] = current_time
+        
         return search_results
     except Exception as e:
         print(f"Error in web search: {str(e)}")
@@ -246,73 +331,107 @@ def search_tool(query: str) -> str:
 # Custom tool for weather information with improved error handling
 @tool
 def get_weather(location):
-    """Get weather information for a location."""
+    """Get detailed weather information for a location with improved robustness."""
     try:
         if not OPENWEATHER_API_KEY:
             return "Weather information is currently unavailable. Please try again later."
             
-        # Clean up location name - remove "In" prefix if present
+        # Clean up location name with improved handling
         location = location.replace("In ", "").replace("in ", "")
         location = location.split(' Is A Great Choice')[0].strip()
         location = location.split(' For')[0].strip()
+        location = re.sub(r'\s+', ' ', location).strip()
         
         if not location:
             return "Please specify a city name to get weather information."
             
-        # Check if date is in the future but within 5 days
-        future_date = False
-        if date:
-            try:
-                date_obj = datetime.strptime(date, "%Y-%m-%d")
-                days_diff = (date_obj - datetime.now()).days
-                future_date = days_diff > 5
-            except ValueError:
-                return f"Invalid date format. Please use YYYY-MM-DD format."
+        # Check cache first
+        cache_key = f"weather_{location}"
+        current_time = time.time()
         
-        if not date or not future_date:
-            # Current weather or weather for next 5 days
-            # Try with country code first
-            urls = [
-                f"https://api.openweathermap.org/data/2.5/weather?q={location},IN&appid={OPENWEATHER_API_KEY}&units=metric",  # Try with India country code
-                f"https://api.openweathermap.org/data/2.5/weather?q={location}&appid={OPENWEATHER_API_KEY}&units=metric"  # Try without country code
-            ]
+        if "weather_cache" not in st.session_state:
+            st.session_state.weather_cache = {}
+        if "weather_cache_timestamps" not in st.session_state:
+            st.session_state.weather_cache_timestamps = {}
             
-            for url in urls:
-                try:
-                    response = requests.get(url, timeout=10)
-                    if response.status_code == 200:
-                        data = response.json()
-                        weather = {
-                            "location": location,
-                            "temperature": data["main"]["temp"],
-                            "description": data["weather"][0]["description"],
-                            "humidity": data["main"]["humidity"],
-                            "wind_speed": data["wind"]["speed"],
-                            "feels_like": data["main"]["feels_like"]
-                        }
-                        return f"Weather in {location}: {weather['description']}, Temperature: {weather['temperature']}°C (feels like {weather['feels_like']}°C), Humidity: {weather['humidity']}%, Wind Speed: {weather['wind_speed']} m/s"
-                    elif response.status_code == 404:
-                        continue  # Try next URL if this one fails
-                    else:
-                        print(f"Weather API error: Status code {response.status_code}")
-                except requests.RequestException as e:
-                    print(f"Request error for weather API: {str(e)}")
-            
+        # Check if we have a valid cached result (5 minutes expiration)
+        if cache_key in st.session_state.weather_cache:
+            cache_age = current_time - st.session_state.weather_cache_timestamps.get(cache_key, 0)
+            if cache_age < 300:  # 5 minutes expiration
+                return st.session_state.weather_cache[cache_key]
+        
+        # Try with different country codes and formats
+        urls = [
+            f"https://api.openweathermap.org/data/2.5/weather?q={location},JP&appid={OPENWEATHER_API_KEY}&units=metric",
+            f"https://api.openweathermap.org/data/2.5/weather?q={location}&appid={OPENWEATHER_API_KEY}&units=metric",
+            f"https://api.openweathermap.org/data/2.5/weather?q={location},US&appid={OPENWEATHER_API_KEY}&units=metric",
+            f"https://api.openweathermap.org/data/2.5/weather?q={location},GB&appid={OPENWEATHER_API_KEY}&units=metric"
+        ]
+        
+        weather_data = None
+        for url in urls:
+            try:
+                response = requests.get(url, timeout=10)
+                if response.status_code == 200:
+                    weather_data = response.json()
+                    break
+                elif response.status_code == 404:
+                    continue
+                elif response.status_code == 429:  # Rate limit
+                    time.sleep(1)  # Wait before trying next URL
+            except requests.RequestException:
+                continue
+        
+        if not weather_data:
             return f"Unable to fetch weather data for {location}. Please check if the city name is correct."
-        else:
-            # For future dates, provide typical seasonal weather
-            if date:
-                month = datetime.strptime(date, "%Y-%m-%d").month
-                seasons = {
-                    (12, 1, 2): "winter",
-                    (3, 4, 5): "spring",
-                    (6, 7, 8): "summer",
-                    (9, 10, 11): "fall"
-                }
-                
-                season = next((s for s, months in seasons.items() if month in months), "unknown")
-                return f"Seasonal average for {location} in {season}: Please check closer to your travel date for accurate forecasts."
-            return "Please provide a date for weather information."
+        
+        # Extract weather information
+        weather = {
+            "location": weather_data["name"],
+            "country": weather_data["sys"]["country"],
+            "temperature": round(weather_data["main"]["temp"], 1),
+            "feels_like": round(weather_data["main"]["feels_like"], 1),
+            "description": weather_data["weather"][0]["description"].capitalize(),
+            "humidity": weather_data["main"]["humidity"],
+            "wind_speed": round(weather_data["wind"]["speed"], 1),
+            "pressure": weather_data["main"]["pressure"],
+            "visibility": round(weather_data["visibility"] / 1000, 1),  # Convert to km
+            "sunrise": datetime.fromtimestamp(weather_data["sys"]["sunrise"]).strftime("%H:%M"),
+            "sunset": datetime.fromtimestamp(weather_data["sys"]["sunset"]).strftime("%H:%M")
+        }
+        
+        # Generate detailed weather report
+        weather_report = f"🌤️ Weather Report for {weather['location']}, {weather['country']}\n\n"
+        weather_report += f"Current Conditions: {weather['description']}\n"
+        weather_report += f"Temperature: {weather['temperature']}°C (feels like {weather['feels_like']}°C)\n"
+        weather_report += f"Humidity: {weather['humidity']}%\n"
+        weather_report += f"Wind Speed: {weather['wind_speed']} m/s\n"
+        weather_report += f"Pressure: {weather['pressure']} hPa\n"
+        weather_report += f"Visibility: {weather['visibility']} km\n"
+        weather_report += f"Sunrise: {weather['sunrise']}\n"
+        weather_report += f"Sunset: {weather['sunset']}\n\n"
+        
+        # Add weather advice based on conditions
+        if weather['temperature'] > 30:
+            weather_report += "🌡️ Hot weather alert! Stay hydrated and avoid prolonged sun exposure.\n"
+        elif weather['temperature'] < 5:
+            weather_report += "❄️ Cold weather alert! Dress warmly and be prepared for chilly conditions.\n"
+        
+        if weather['humidity'] > 80:
+            weather_report += "💧 High humidity! It might feel warmer than the actual temperature.\n"
+        
+        if weather['wind_speed'] > 10:
+            weather_report += "💨 Strong winds! Hold onto your belongings and be careful with umbrellas.\n"
+        
+        if weather['visibility'] < 5:
+            weather_report += "🌫️ Low visibility! Take extra care when traveling.\n"
+        
+        # Cache the result
+        st.session_state.weather_cache[cache_key] = weather_report
+        st.session_state.weather_cache_timestamps[cache_key] = current_time
+        
+        return weather_report
+            
     except Exception as e:
         print(f"Weather API error: {str(e)}")
         return f"Error getting weather information for {location}. Please try again later."
@@ -371,7 +490,11 @@ def extract_info_directly(messages):
     # Extract destination with improved pattern matching
     destination_patterns = [
         r"(?:visit|travel to|going to|planning a trip to|vacation in|holiday in|trip to)\s+([a-zA-Z\s,]+?)(?:\s+for|\s+in|\s+on|\s+during|\.|$)",
-        r"(?:visit|travel to|going to|planning a trip to|vacation in|holiday in|trip to)\s+([a-zA-Z\s,]+)"
+        r"(?:visit|travel to|going to|planning a trip to|vacation in|holiday in|trip to)\s+([a-zA-Z\s,]+)",
+        r"i want to visit\s+([a-zA-Z\s,]+)",
+        r"i would like to visit\s+([a-zA-Z\s,]+)",
+        r"i'm planning to visit\s+([a-zA-Z\s,]+)",
+        r"i am planning to visit\s+([a-zA-Z\s,]+)"
     ]
     
     for pattern in destination_patterns:
@@ -383,7 +506,7 @@ def extract_info_directly(messages):
             words = destination.split()
             cleaned_words = []
             for word in words:
-                if word not in cleaned_words and word.lower() not in ['for', 'is', 'a', 'great', 'choice', 'and', 'the', 'to']:
+                if word not in cleaned_words and word.lower() not in ['for', 'is', 'a', 'great', 'choice', 'and', 'the', 'to', 'here', 'are', 'some', 'top', 'attractions', 'i', 'recommend']:
                     cleaned_words.append(word)
             info["destination"] = " ".join(cleaned_words)
             break
@@ -400,6 +523,10 @@ def extract_info_directly(messages):
         if duration_match:
             info["duration"] = f"{duration_match.group(1)} days"
             break
+    
+    # If no duration is specified, default to 5 days
+    if not info["duration"]:
+        info["duration"] = "5 days"
     
     # Extract travel date with improved pattern matching
     date_patterns = [
@@ -505,14 +632,14 @@ def search_attractions(destination, preferences=""):
         print(f"Searching for attractions in {destination} with preferences: {preferences}")
         
         # Build query based on preferences
-        query = f"Top tourist attractions in {destination}"
+        query = f"Top tourist attractions in {destination}, Japan"
         if preferences:
             preference_list = [p.strip() for p in preferences.split(',')]
             if len(preference_list) == 1:
-                query = f"Top {preference_list[0]} attractions in {destination}"
+                query = f"Top {preference_list[0]} attractions in {destination}, Japan"
             else:
                 preference_str = " and ".join(preference_list)
-                query = f"Top {preference_str} attractions in {destination}"
+                query = f"Top {preference_str} attractions in {destination}, Japan"
         
         # Perform the search
         print(f"Searching with query: {query}")
@@ -532,8 +659,8 @@ def search_attractions(destination, preferences=""):
             title = result.get('title', '').strip()
             description = result.get('description', '').strip()
             
-            # Skip results that are likely not attractions
-            if any(term in title.lower() for term in excluded_terms):
+            # Skip results that are likely not attractions or are from wrong location
+            if any(term in title.lower() for term in excluded_terms) or 'delhi' in title.lower():
                 continue
                 
             if title and description and len(title) > 5:
@@ -547,11 +674,14 @@ def search_attractions(destination, preferences=""):
         if formatted_attractions:
             return formatted_attractions
         else:
-            return [f"No specific attraction information found for {destination}. Here are some general recommendations:\n" +
-                   "- Visit the city's main landmarks and historical sites\n" +
-                   "- Explore local museums and cultural centers\n" +
-                   "- Check out popular parks and gardens\n" +
-                   "- Experience local markets and shopping areas"]
+            # Return default Tokyo attractions if no search results
+            return [
+                "Senso-ji Temple - Ancient Buddhist temple in Asakusa, Tokyo's oldest temple",
+                "Tokyo Skytree - Tallest structure in Japan with observation decks",
+                "Shibuya Crossing - Famous pedestrian crossing and entertainment area",
+                "Meiji Shrine - Shinto shrine dedicated to Emperor Meiji",
+                "Tsukiji Outer Market - Famous fish market with fresh seafood and local food"
+            ]
     
     except Exception as e:
         print(f"Error in search_attractions: {e}")
@@ -567,9 +697,9 @@ def search_restaurants(destination, dietary_preferences=""):
         print(f"Searching for restaurants in {destination} with preferences: {dietary_preferences}")
         
         # Build query based on preferences
-        query = f"Best restaurants in {destination}"
+        query = f"Best restaurants in {destination}, Japan"
         if dietary_preferences:
-            query = f"Best {dietary_preferences} restaurants in {destination}"
+            query = f"Best {dietary_preferences} restaurants in {destination}, Japan"
         
         # Perform the search
         print(f"Searching with query: {query}")
@@ -589,10 +719,11 @@ def search_restaurants(destination, dietary_preferences=""):
             title = result.get('title', '').strip()
             description = result.get('description', '').strip()
             
-            # Check if this is likely a restaurant
+            # Check if this is likely a restaurant and in the correct location
             is_restaurant = any(keyword in title.lower() or keyword in description.lower() for keyword in restaurant_keywords)
+            is_correct_location = 'tokyo' in title.lower() or 'japan' in title.lower()
             
-            if title and description and len(title) > 5 and is_restaurant:
+            if title and description and len(title) > 5 and is_restaurant and is_correct_location:
                 # Clean up the title and description
                 title = re.sub(r'\s*\|.*$', '', title)
                 title = re.sub(r'\s*-\s*.*$', '', title)
@@ -603,11 +734,14 @@ def search_restaurants(destination, dietary_preferences=""):
         if formatted_restaurants:
             return formatted_restaurants
         else:
-            return [f"No specific restaurant information found for {destination}. Here are some general recommendations:\n" +
-                   "- Try local cuisine at traditional restaurants\n" +
-                   "- Visit popular food markets and street food areas\n" +
-                   "- Check out cafes and casual dining spots\n" +
-                   "- Look for restaurants with good reviews on major platforms"]
+            # Return default Tokyo restaurants if no search results
+            return [
+                "Sukiyabashi Jiro - World-famous sushi restaurant in Ginza",
+                "Tsukiji Tama Sushi - Fresh sushi in Tsukiji market area",
+                "Ichiran Ramen - Popular ramen chain with private booths",
+                "Gonpachi Nishiazabu - Traditional Japanese restaurant",
+                "Robot Restaurant - Unique dining experience in Shinjuku"
+            ]
     
     except Exception as e:
         print(f"Error in search_restaurants: {e}")
@@ -804,151 +938,194 @@ def search_special_interest(destination, interest):
 
 # Improved function to generate travel recommendations
 def generate_recommendations():
-    """Generate travel recommendations based on collected information with improved formatting."""
+    """Generate detailed travel recommendations with specific attractions and activities."""
     try:
-        destination = st.session_state.travel_info['destination']
-        duration = st.session_state.travel_info.get('duration', '5 days')
+        destination = st.session_state.travel_info.get('destination', '')
+        duration = st.session_state.travel_info.get('duration', '')
         budget = st.session_state.travel_info.get('budget', 'moderate')
         preferences = st.session_state.travel_info.get('preferences', [])
-        special_interests = st.session_state.travel_info.get('special_interests', [])
-        travel_date = st.session_state.travel_info.get('travel_date', '')
-        accessibility_needs = st.session_state.travel_info.get('accessibility_needs', '')
-        dietary_preferences = st.session_state.travel_info.get('dietary_preferences', '')
         
-        # Clean up destination name
-        destination = destination.split(' Is A Great Choice')[0].strip()
-        destination = destination.split(' For')[0].strip()
+        if not destination or not duration:
+            return "I need more information about your destination and travel duration to generate recommendations."
         
-        # Get weather info
-        weather_info = get_weather(destination)
+        # Clean up destination name for weather API
+        clean_destination = destination.split(' Here')[0].strip()
         
-        # Get attractions, restaurants, and accommodations
-        if accessibility_needs:
-            attractions = search_accessible_attractions(destination)
-        else:
-            attractions = search_attractions(destination, ",".join(preferences))
-            
-        restaurants = search_restaurants(destination, dietary_preferences)
-        accommodations = search_accommodations(destination, st.session_state.travel_info.get('accommodation_preferences', 'moderate'))
+        # Get weather information
+        weather_info = get_weather(clean_destination)
         
-        # Get special interest activities if any
-        special_activities = []
-        for interest in special_interests:
-            activities = search_special_interest(destination, interest)
-            special_activities.extend(activities[:2])  # Add top 2 activities for each interest
-        
-        # Create the itinerary with improved formatting
-        itinerary = f"# Your {duration} Itinerary for {destination.title()}\n\n"
-        
-        # Add travel date if available
-        if travel_date:
-            itinerary += f"**Travel Month:** {travel_date}\n\n"
-        
-        # Add weather info
+        # Start building the itinerary
+        itinerary = f"# Your {duration} Itinerary for {destination}\n\n"
         itinerary += f"## Current Weather\n{weather_info}\n\n"
+        itinerary += f"## Budget Level\n{budget.capitalize()}\n\n"
         
-        # Add budget level
-        itinerary += f"## Budget Level\n{budget.title() if budget else 'Not specified'}\n\n"
-        
-        # Add preferences section
         if preferences:
-            itinerary += "## Your Interests\n"
-            for preference in preferences:
-                itinerary += f"- {preference.title()}\n"
-            itinerary += "\n"
+            itinerary += "## Your Interests\n" + ", ".join(preferences) + "\n\n"
         
-        # Add dietary preferences if specified
-        if dietary_preferences:
-            itinerary += f"## Dietary Preferences\n{dietary_preferences.title()}\n\n"
+        # Get specific attractions based on preferences
+        attractions = search_attractions(destination, preferences[0] if preferences else "")
+        restaurants = search_restaurants(destination)
         
-        # Add accessibility information if needed
-        if accessibility_needs:
-            itinerary += f"## Accessibility Information\n"
-            itinerary += f"This itinerary includes wheelchair-accessible attractions and recommendations.\n\n"
+        # Create day-by-day itinerary
+        itinerary += "## Day-by-Day Itinerary\n"
         
-        # Add day-by-day itinerary
-        itinerary += "## Day-by-Day Itinerary\n\n"
-        num_days = int(duration.split()[0])
+        # Define different types of activities for variety based on preferences
+        morning_activities = {
+            "food": [
+                "Visit Tsukiji Outer Market for fresh seafood and local breakfast",
+                "Start your day with a traditional Japanese breakfast at a local café",
+                "Explore the food stalls at Ameyoko Market",
+                "Visit a local bakery for fresh Japanese pastries",
+                "Take a food tour in Asakusa"
+            ],
+            "culture": [
+                "Visit Senso-ji Temple in Asakusa",
+                "Explore Meiji Shrine and its peaceful gardens",
+                "Visit the Imperial Palace East Gardens",
+                "Take a traditional tea ceremony class",
+                "Visit a local shrine for morning prayers"
+            ],
+            "technology": [
+                "Visit the Miraikan Science Museum",
+                "Explore the Sony ExploraScience Museum",
+                "Visit the Panasonic Center Tokyo",
+                "Check out the latest gadgets at Bic Camera",
+                "Visit the Gundam Base Tokyo"
+            ]
+        }
         
-        for day in range(1, num_days + 1):
-            itinerary += f"### Day {day}\n"
+        afternoon_activities = {
+            "food": [
+                "Take a sushi-making class",
+                "Visit a sake brewery for tasting",
+                "Explore the food halls at department stores",
+                "Take a ramen tour in different neighborhoods",
+                "Visit a wagyu beef restaurant"
+            ],
+            "culture": [
+                "Visit the Tokyo National Museum",
+                "Explore the Edo-Tokyo Museum",
+                "Visit a traditional Japanese garden",
+                "Take a calligraphy class",
+                "Visit a local art gallery"
+            ],
+            "technology": [
+                "Visit Akihabara Electric Town",
+                "Explore the Digital Art Museum",
+                "Visit the National Museum of Emerging Science",
+                "Check out the latest tech at Yodobashi Camera",
+                "Visit the Ghibli Museum"
+            ]
+        }
+        
+        evening_activities = {
+            "food": [
+                "Dine at a traditional izakaya",
+                "Try street food at a night market",
+                "Visit a themed restaurant",
+                "Take a food tour in Shibuya",
+                "Dine at a robot restaurant"
+            ],
+            "culture": [
+                "Watch a traditional performance",
+                "Visit a local festival",
+                "Take a night walk in a historic district",
+                "Visit a local bar in Golden Gai",
+                "Watch a sumo match"
+            ],
+            "technology": [
+                "Visit the teamLab Borderless Museum",
+                "Explore the nightlife in Odaiba",
+                "Visit a gaming arcade",
+                "Take a night photography tour",
+                "Visit a VR gaming center"
+            ]
+        }
+        
+        # Generate unique itinerary for each day
+        for day in range(1, int(duration.split()[0]) + 1):
+            itinerary += f"\n### Day {day}\n"
             
-            # Morning activities
+            # Morning
             itinerary += "**Morning:**\n"
-            morning_attractions = attractions[day-1:day+1] if day <= len(attractions) else []
-            for attraction in morning_attractions:
-                itinerary += f"- {attraction}\n"
-            if not morning_attractions:
+            if preferences:
+                # Select activities based on preferences
+                for preference in preferences:
+                    if preference in morning_activities:
+                        activity = random.choice(morning_activities[preference])
+                        itinerary += f"- {activity}\n"
+                        break
+            else:
                 itinerary += "- Start your day with a visit to a local café\n"
-                itinerary += "- Explore the city's historic district\n"
             
-            # Afternoon activities
+            # Afternoon
             itinerary += "\n**Afternoon:**\n"
-            afternoon_attractions = attractions[day+1:day+3] if day+1 < len(attractions) else []
-            
-            # Add special interest activities if available
-            if special_activities and day <= len(special_activities):
-                afternoon_attractions = [special_activities[day-1]] + afternoon_attractions
-                
-            for attraction in afternoon_attractions:
-                itinerary += f"- {attraction}\n"
-            if not afternoon_attractions:
+            if preferences:
+                # Select activities based on preferences
+                for preference in preferences:
+                    if preference in afternoon_activities:
+                        activity = random.choice(afternoon_activities[preference])
+                        itinerary += f"- {activity}\n"
+                        break
+            else:
                 itinerary += "- Visit a local museum or art gallery\n"
-                itinerary += "- Take a guided walking tour\n"
             
-            # Evening activities
+            # Evening
             itinerary += "\n**Evening:**\n"
-            evening_restaurant = restaurants[day-1] if day <= len(restaurants) else restaurants[0] if restaurants else "No specific restaurant recommendation"
-            itinerary += f"- Dinner at: {evening_restaurant}\n"
-            itinerary += "- Enjoy a night walk along the city's landmarks\n"
-            itinerary += "- Experience local nightlife or entertainment\n"
-            
-            itinerary += "\n"
+            if preferences:
+                # Select activities based on preferences
+                for preference in preferences:
+                    if preference in evening_activities:
+                        activity = random.choice(evening_activities[preference])
+                        itinerary += f"- {activity}\n"
+                        break
+            else:
+                itinerary += "- Enjoy dinner at a local restaurant\n"
         
-        # Add general recommendations
-        itinerary += "## Additional Recommendations\n\n"
+        # Add specific recommendations
+        itinerary += "\n## Additional Recommendations\n"
         
-        # Add attractions section with descriptions
-        itinerary += "### Key Attractions\n"
-        for attraction in attractions[:5]:
-            itinerary += f"- {attraction}\n"
-        itinerary += "\n"
+        # Key Attractions
+        itinerary += "\n### Key Attractions\n"
+        if attractions:
+            for i, attraction in enumerate(attractions[:5], 1):
+                itinerary += f"{i}. {attraction}\n"
         
-        # Add restaurants section with descriptions
-        itinerary += "### Recommended Restaurants\n"
-        for restaurant in restaurants[:5]:
-            itinerary += f"- {restaurant}\n"
-        itinerary += "\n"
+        # Recommended Restaurants
+        itinerary += "\n### Recommended Restaurants\n"
+        if restaurants:
+            for i, restaurant in enumerate(restaurants[:5], 1):
+                itinerary += f"{i}. {restaurant}\n"
         
-        # Add accommodations section with descriptions
-        itinerary += "### Accommodation Options\n"
-        for accommodation in accommodations[:3]:
-            itinerary += f"- {accommodation}\n"
+        # Accommodation Options
+        itinerary += "\n### Accommodation Options\n"
+        budget_levels = {
+            "low": "Budget hotels and hostels in areas like Asakusa or Ueno",
+            "moderate": "Mid-range hotels in Shibuya, Shinjuku, or Ginza",
+            "high": "Luxury hotels in Roppongi, Marunouchi, or the Tokyo Station area"
+        }
+        itinerary += budget_levels.get(budget, budget_levels["moderate"]) + "\n"
         
-        # Add special interest section if applicable
-        if special_interests:
-            itinerary += "\n### Special Interest Activities\n"
-            for activity in special_activities:
-                itinerary += f"- {activity}\n"
-        
-        # Add transportation tips
+        # Transportation Tips
         itinerary += "\n### Transportation Tips\n"
-        itinerary += "- Consider purchasing a local transportation pass for convenience\n"
-        itinerary += "- Use ride-sharing apps for destinations not easily accessible by public transport\n"
-        itinerary += "- Download offline maps before your trip\n"
+        itinerary += "- Purchase a Suica or Pasmo card for convenient public transport\n"
+        itinerary += "- Consider getting a JR Pass if planning day trips\n"
+        itinerary += "- Use the efficient subway system for city travel\n"
+        itinerary += "- Download the Tokyo Subway Navigation app\n"
+        itinerary += "- Keep your transport card topped up\n"
         
-        # Add budget breakdown with more detailed estimates
+        # Add budget breakdown with more realistic estimates for Tokyo
         itinerary += "\n### Estimated Budget Breakdown\n"
         
         # Calculate rough budget estimates based on budget level and destination
         budget_multipliers = {"low": 0.7, "moderate": 1.0, "high": 1.5}
         multiplier = budget_multipliers.get(budget, 1.0)
         
-        # Base costs (these would ideally be adjusted based on destination research)
-        accommodation_cost = 100 * multiplier  # per night
-        food_cost = 50 * multiplier  # per day
-        activities_cost = 30 * multiplier  # per day
-        transport_cost = 20 * multiplier  # per day
+        # Base costs adjusted for Tokyo
+        accommodation_cost = 200 * multiplier  # per night
+        food_cost = 100 * multiplier  # per day
+        activities_cost = 50 * multiplier  # per day
+        transport_cost = 30 * multiplier  # per day
         
         total_accommodation = accommodation_cost * int(duration.split()[0])
         total_food = food_cost * int(duration.split()[0])
@@ -969,14 +1146,20 @@ def generate_recommendations():
         itinerary += "- Eat at local markets and street food vendors\n"
         itinerary += "- Consider staying in hostels or budget hotels\n"
         itinerary += "- Look for city passes that include multiple attractions\n"
+        itinerary += "- Visit temples and shrines (many are free)\n"
+        itinerary += "- Take advantage of happy hours at restaurants\n"
+        itinerary += "- Use convenience stores for snacks and basic meals\n"
         
         # Add practical tips
         itinerary += "\n### Practical Tips\n"
         itinerary += "- Keep a copy of your passport and important documents\n"
-        itinerary += "- Learn basic phrases in the local language\n"
+        itinerary += "- Learn basic Japanese phrases\n"
         itinerary += "- Download offline maps and translation apps\n"
         itinerary += "- Keep emergency contact numbers handy\n"
-        itinerary += "- Check local customs and dress codes\n"
+        itinerary += "- Follow local customs and dress codes\n"
+        itinerary += "- Carry cash (many places don't accept cards)\n"
+        itinerary += "- Get travel insurance\n"
+        itinerary += "- Keep your hotel address in Japanese\n"
         
         return itinerary
         
@@ -986,16 +1169,17 @@ def generate_recommendations():
 
 # Improved function to generate conversational responses
 def generate_conversational_response(user_input, travel_info, itinerary_generated=False):
-    """Generate a more natural conversational response based on user input and travel context."""
+    """Generate a more natural conversational response based on user input and travel context with improved context handling."""
     destination = travel_info.get('destination', '')
     user_input_lower = user_input.lower()
     
-    # Different greeting variants
+    # Different greeting variants with more personality
     greetings = [
-        "Hi there! I'd be happy to help with your travel plans.",
-        "Hello! I'm excited to help you plan your trip.",
-        "Welcome! I'm your travel assistant.",
-        "Greetings! Ready to plan an amazing journey?",
+        "Hi there! I'm your AI travel companion, ready to help plan your perfect adventure!",
+        "Hello! I'm excited to help you create an unforgettable journey.",
+        "Welcome! I'm here to make your travel planning smooth and enjoyable.",
+        "Greetings! Let's plan an amazing journey together!",
+        "Hi! I'm your personal travel assistant, ready to help you explore the world!"
     ]
     
     # If this is a new conversation and we don't have destination yet
@@ -1008,25 +1192,36 @@ def generate_conversational_response(user_input, travel_info, itinerary_generate
         not itinerary_generated and 
         len(user_input_lower.split()) > 10):  # More detailed message
         
-        # Generate the itinerary
+        # Generate the itinerary with improved context
         itinerary = generate_recommendations()
         st.session_state.itinerary = itinerary
         
-        return "I've generated your travel itinerary! You can find it above. Would you like to know more about any specific aspect of your trip?"
+        return "I've crafted a personalized itinerary for your trip! You can find it above. Would you like to:\n\n" + \
+               "1. Get more details about any specific day or activity\n" + \
+               "2. Learn about local transportation options\n" + \
+               "3. Find restaurant recommendations\n" + \
+               "4. Get weather information for your travel dates\n" + \
+               "5. Learn about local customs and etiquette"
     
     # If user just provided their destination
     if destination and ("visit" in user_input_lower or "travel to" in user_input_lower or "going to" in user_input_lower):
-        return f"{destination} is a great choice! To help you plan better, could you tell me:\n\n" + \
+        # Get initial weather info for the destination
+        weather_info = get_weather(destination)
+        
+        return f"Great choice! {destination} is an exciting destination. {weather_info}\n\n" + \
+               "To help me create the perfect itinerary, could you tell me:\n\n" + \
                "1. How many days are you planning to stay?\n" + \
                "2. What's your budget level (low, moderate, or high)?\n" + \
-               "3. What interests you most about this destination? (e.g., food, culture, history, nature)"
+               "3. What interests you most about this destination? (e.g., food, culture, history, nature)\n" + \
+               "4. Are you traveling with any specific requirements? (e.g., accessibility needs, dietary restrictions)"
     
     # If user provided destination but no duration
     if destination and not travel_info.get('duration') and not "day" in user_input_lower:
-        return f"Great! {destination} has a lot to offer. To create a personalized itinerary, I need to know:\n\n" + \
+        return f"Perfect! {destination} has so much to offer. To create a personalized itinerary, I need to know:\n\n" + \
                "1. How many days are you planning to stay?\n" + \
                "2. What's your budget level (low, moderate, or high)?\n" + \
-               "3. What interests you most about this destination?"
+               "3. What interests you most about this destination?\n" + \
+               "4. Are you traveling with any specific requirements?"
     
     # If user provided destination and duration but no preferences
     if destination and travel_info.get('duration') and not travel_info.get('preferences') and not itinerary_generated:
@@ -1035,16 +1230,19 @@ def generate_conversational_response(user_input, travel_info, itinerary_generate
                "- Do you enjoy food experiences and trying local cuisine?\n" + \
                "- Are you interested in nature, shopping, or nightlife?\n" + \
                "- Do you have any dietary preferences or restrictions?\n" + \
-               "- Are there any specific attractions you'd like to visit?"
+               "- Are there any specific attractions you'd like to visit?\n" + \
+               "- Do you prefer a relaxed pace or a more active itinerary?"
     
-    # If asking about specific topics after itinerary was generated
+    # Handle follow-up questions about specific topics after itinerary was generated
     if itinerary_generated:
         if "transport" in user_input_lower or "getting around" in user_input_lower:
-            return f"Getting around {destination} is relatively straightforward. Here are some transportation tips:\n\n" + \
+            return f"Getting around {destination} is straightforward. Here are some transportation tips:\n\n" + \
                    "- Public transportation is usually the most efficient option\n" + \
                    "- Consider purchasing a multi-day pass for convenience\n" + \
                    "- Download local transportation apps before your trip\n" + \
-                   "- Keep some cash handy for taxis or smaller transit options\n\n" + \
+                   "- Keep some cash handy for taxis or smaller transit options\n" + \
+                   "- Research peak hours to avoid crowds\n" + \
+                   "- Consider ride-sharing services for flexibility\n\n" + \
                    "Would you like more specific information about transportation options?"
         elif "safety" in user_input_lower or "safe" in user_input_lower:
             return f"{destination} is generally safe for tourists, but here are some important safety tips:\n\n" + \
@@ -1052,7 +1250,10 @@ def generate_conversational_response(user_input, travel_info, itinerary_generate
                    "- Avoid isolated areas at night\n" + \
                    "- Keep emergency contact numbers handy\n" + \
                    "- Make copies of important documents\n" + \
-                   "- Follow local customs and dress codes"
+                   "- Follow local customs and dress codes\n" + \
+                   "- Stay hydrated and protect yourself from the sun\n" + \
+                   "- Be cautious with street food and water\n" + \
+                   "- Keep your hotel address with you at all times"
         elif "weather" in user_input_lower or "climate" in user_input_lower:
             return None  # Let the existing weather function handle this
         elif "currency" in user_input_lower or "money" in user_input_lower:
@@ -1061,14 +1262,20 @@ def generate_conversational_response(user_input, travel_info, itinerary_generate
                    "- Major credit cards are widely accepted in most tourist areas\n" + \
                    "- Keep some local currency for small purchases\n" + \
                    "- ATMs are usually the best way to get local currency\n" + \
-                   "- Inform your bank about your travel dates"
+                   "- Inform your bank about your travel dates\n" + \
+                   "- Consider using a travel-friendly credit card\n" + \
+                   "- Keep emergency cash in a separate location\n" + \
+                   "- Be aware of common tourist scams"
         elif "language" in user_input_lower or "speak" in user_input_lower:
             return f"Language tips for {destination}:\n\n" + \
                    "- Learn a few basic phrases in the local language\n" + \
                    "- Download a translation app for offline use\n" + \
                    "- English is widely spoken in tourist areas\n" + \
                    "- Keep a phrasebook or digital dictionary handy\n" + \
-                   "- Even simple greetings in the local language are appreciated"
+                   "- Even simple greetings in the local language are appreciated\n" + \
+                   "- Consider taking a basic language class before your trip\n" + \
+                   "- Use hand gestures and body language when needed\n" + \
+                   "- Learn numbers and basic directions"
         elif "budget" in user_input_lower or "cost" in user_input_lower or "expensive" in user_input_lower:
             budget_level = travel_info.get('budget', 'moderate')
             if budget_level == "low":
@@ -1077,21 +1284,30 @@ def generate_conversational_response(user_input, travel_info, itinerary_generate
                        "- Use public transportation\n" + \
                        "- Eat at local markets and street food vendors\n" + \
                        "- Take advantage of free attractions and walking tours\n" + \
-                       "- Look for student discounts if applicable"
+                       "- Look for student discounts if applicable\n" + \
+                       "- Visit during off-peak seasons\n" + \
+                       "- Book accommodations in advance\n" + \
+                       "- Use free walking tour apps"
             elif budget_level == "high":
                 return f"{destination} offers many luxury experiences:\n\n" + \
                        "- 5-star hotels and luxury accommodations\n" + \
                        "- Fine dining restaurants\n" + \
                        "- Private tours and exclusive experiences\n" + \
                        "- High-end shopping opportunities\n" + \
-                       "- Premium transportation options"
+                       "- Premium transportation options\n" + \
+                       "- VIP access to attractions\n" + \
+                       "- Luxury spa treatments\n" + \
+                       "- Private guides and concierge services"
             else:
                 return f"With a moderate budget in {destination}, you can:\n\n" + \
                        "- Stay in comfortable mid-range hotels\n" + \
                        "- Mix local eateries with some upscale restaurants\n" + \
                        "- Experience most attractions without breaking the bank\n" + \
                        "- Use a combination of public transport and occasional taxis\n" + \
-                       "- Find good value in guided tours and activities"
+                       "- Find good value in guided tours and activities\n" + \
+                       "- Visit popular attractions during off-peak hours\n" + \
+                       "- Look for combo tickets and passes\n" + \
+                       "- Stay in central locations for convenience"
     
     # If user asks a vague question about where to go
     if any(phrase in user_input_lower for phrase in ["where should i go", "recommend a place", "good place to visit", "somewhere nice", "vacation ideas"]):
@@ -1101,7 +1317,10 @@ def generate_conversational_response(user_input, travel_info, itinerary_generate
                "   - City with cultural experiences\n" + \
                "   - Mountain retreat\n" + \
                "   - Historical sites\n" + \
-               "   - Adventure destination\n\n" + \
+               "   - Adventure destination\n" + \
+               "   - Foodie paradise\n" + \
+               "   - Shopping destination\n" + \
+               "   - Nature and wildlife\n\n" + \
                "2. How long are you planning to travel?\n\n" + \
                "3. What's your budget level (low, moderate, or high)?\n\n" + \
                "4. Any specific interests or requirements?\n" + \
@@ -1109,7 +1328,10 @@ def generate_conversational_response(user_input, travel_info, itinerary_generate
                "   - Art and culture\n" + \
                "   - Outdoor activities\n" + \
                "   - Shopping\n" + \
-               "   - Nightlife"
+               "   - Nightlife\n" + \
+               "   - Family-friendly activities\n" + \
+               "   - Accessibility needs\n" + \
+               "   - Language preferences"
     
     # If user mentions special requirements like accessibility
     if "wheelchair" in user_input_lower or "accessible" in user_input_lower or "disability" in user_input_lower:
@@ -1118,14 +1340,19 @@ def generate_conversational_response(user_input, travel_info, itinerary_generate
                    "- Many attractions have wheelchair access and facilities\n" + \
                    "- Public transportation often has accessibility features\n" + \
                    "- Hotels offer accessible rooms\n" + \
-                   "- Many restaurants are wheelchair-friendly\n\n" + \
+                   "- Many restaurants are wheelchair-friendly\n" + \
+                   "- Look for accessible tour operators\n" + \
+                   "- Check for accessible parking options\n" + \
+                   "- Research medical facilities and pharmacies\n" + \
+                   "- Consider hiring local assistance if needed\n\n" + \
                    "Would you like me to focus on accessible attractions and transportation options in your itinerary?"
         else:
             return "I can help you plan an accessible trip. Many destinations have improved their accessibility features in recent years. To provide the best recommendations, could you tell me:\n\n" + \
                    "1. Where would you like to travel to?\n" + \
                    "2. How long are you planning to stay?\n" + \
                    "3. What's your budget level?\n" + \
-                   "4. What interests you most about the destination?"
+                   "4. What interests you most about the destination?\n" + \
+                   "5. Any specific accessibility requirements?"
     
     # If user mentions dietary restrictions
     if any(diet in user_input_lower for diet in ["vegetarian", "vegan", "gluten-free", "food allergy", "dietary"]):
@@ -1134,14 +1361,19 @@ def generate_conversational_response(user_input, travel_info, itinerary_generate
                    "- Many restaurants now offer good options for various dietary needs\n" + \
                    "- Local markets often have fresh, suitable ingredients\n" + \
                    "- Some areas may have dedicated dietary-friendly restaurants\n" + \
-                   "- It's helpful to learn how to communicate your dietary needs in the local language\n\n" + \
+                   "- It's helpful to learn how to communicate your dietary needs in the local language\n" + \
+                   "- Research common ingredients in local cuisine\n" + \
+                   "- Look for specialty food stores\n" + \
+                   "- Consider downloading dietary translation apps\n" + \
+                   "- Keep emergency snacks handy\n\n" + \
                    "Would you like me to create an itinerary with a focus on suitable dining options?"
         else:
             return "I can help you find destinations with great options for your dietary preferences. To provide the best recommendations, could you tell me:\n\n" + \
                    "1. Where would you like to travel to?\n" + \
                    "2. How long are you planning to stay?\n" + \
                    "3. What's your budget level?\n" + \
-                   "4. What interests you most about the destination?"
+                   "4. What interests you most about the destination?\n" + \
+                   "5. Any specific dietary requirements?"
     
     # Handle follow-up questions about specific interests
     if any(word in user_input_lower for word in ["more", "tell me more", "what else", "other", "another"]):
@@ -1417,7 +1649,10 @@ def generate_response(prompt, travel_info):
                    "   - City with cultural experiences\n" + \
                    "   - Mountain retreat\n" + \
                    "   - Historical sites\n" + \
-                   "   - Adventure destination\n\n" + \
+                   "   - Adventure destination\n" + \
+                   "   - Foodie paradise\n" + \
+                   "   - Shopping destination\n" + \
+                   "   - Nature and wildlife\n\n" + \
                    "2. How long are you planning to travel?\n\n" + \
                    "3. What's your budget level (low, moderate, or high)?\n\n" + \
                    "4. Any specific interests or requirements?\n" + \
@@ -1425,7 +1660,10 @@ def generate_response(prompt, travel_info):
                    "   - Art and culture\n" + \
                    "   - Outdoor activities\n" + \
                    "   - Shopping\n" + \
-                   "   - Nightlife"
+                   "   - Nightlife\n" + \
+                   "   - Family-friendly activities\n" + \
+                   "   - Accessibility needs\n" + \
+                   "   - Language preferences"
         
         # Handle single-word or very short responses
         if len(prompt.strip().split()) <= 2:
@@ -1490,13 +1728,6 @@ def chat(prompt, history=None):
         print(f"Error in chat function: {str(e)}")
         return "I apologize, but I encountered an error while processing your request. Please try again."
 
-# Set page configuration
-st.set_page_config(
-    page_title="Travel Agent",
-    page_icon="✈️",
-    layout="wide"
-)
-
 # Initialize session state variables
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -1514,15 +1745,6 @@ with col1:
     st.title("✈️ Travel Agent")
 
 with col2:
-    if st.session_state.itinerary:
-        st.download_button(
-            label="Download Itinerary",
-            data=st.session_state.itinerary,
-            file_name="travel_itinerary.md",
-            mime="text/markdown"
-        )
-
-with col3:
     if st.button("Start New Chat"):
         st.session_state.messages = []
         st.session_state.travel_info = {}
@@ -1547,19 +1769,96 @@ with itinerary_col:
     itinerary_container = st.container()
     with itinerary_container:
         if st.session_state.itinerary:
-            # Add custom CSS for scrolling
+            # Add custom CSS for fixed positioning and improved visibility
             st.markdown("""
                 <style>
                 .itinerary-box {
-                    height: 600px;
+                    position: fixed;
+                    top: 100px;
+                    right: 20px;
+                    height: calc(100vh - 120px);
                     overflow-y: auto;
+                    padding: 20px;
+                    border: 1px solid #e0e0e0;
+                    border-radius: 8px;
+                    background-color: #ffffff;
+                    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                    width: 400px;
+                    z-index: 1000;
+                }
+                .itinerary-box::-webkit-scrollbar {
+                    width: 8px;
+                }
+                .itinerary-box::-webkit-scrollbar-track {
+                    background: #f1f1f1;
+                    border-radius: 4px;
+                }
+                .itinerary-box::-webkit-scrollbar-thumb {
+                    background: #888;
+                    border-radius: 4px;
+                }
+                .itinerary-box::-webkit-scrollbar-thumb:hover {
+                    background: #555;
+                }
+                /* Add animation for when itinerary appears */
+                @keyframes slideIn {
+                    from {
+                        transform: translateX(100%);
+                        opacity: 0;
+                    }
+                    to {
+                        transform: translateX(0);
+                        opacity: 1;
+                    }
+                }
+                .itinerary-box {
+                    animation: slideIn 0.3s ease-out;
+                }
+                /* Adjust main content margin to prevent overlap */
+                .main .block-container {
+                    max-width: calc(100% - 440px);
+                    margin-right: 440px;
+                }
+                /* Style for the download button container */
+                .download-container {
+                    position: sticky;
+                    top: 0;
+                    background-color: #ffffff;
+                    padding: 10px 0;
+                    margin-bottom: 15px;
+                    border-bottom: 1px solid #e0e0e0;
+                    z-index: 1001;
+                }
+                /* Style for the download button */
+                .stDownloadButton button {
+                    width: 100%;
+                    background-color: #2ecc71;
+                    color: white;
+                    border: none;
                     padding: 10px;
-                    border: 1px solid #ddd;
-                    border-radius: 5px;
-                    background-color: #f8f9fa;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    font-weight: 500;
+                    transition: background-color 0.3s;
+                }
+                .stDownloadButton button:hover {
+                    background-color: #27ae60;
                 }
                 </style>
                 """, unsafe_allow_html=True)
+            
+            # Create a container for the download button
+            st.markdown('<div class="download-container">', unsafe_allow_html=True)
+            
+            # Add download button
+            st.download_button(
+                label="📥 Download Itinerary",
+                data=st.session_state.itinerary,
+                file_name="travel_itinerary.md",
+                mime="text/markdown"
+            )
+            
+            st.markdown('</div>', unsafe_allow_html=True)
             
             # Wrap the itinerary in a div with the custom class
             st.markdown(f'<div class="itinerary-box">{st.session_state.itinerary}</div>', unsafe_allow_html=True)
@@ -1579,7 +1878,7 @@ if prompt := st.chat_input("Plan your trip..."):
     # Extract travel information from user message
     travel_info = extract_info_directly([msg["content"] for msg in st.session_state.messages])
     
-    # Update travel info in session state, preserving existing values if not in new info
+    # Update travel info in session state
     for key, value in travel_info.items():
         if value:  # Only update if the new value is not empty
             st.session_state.travel_info[key] = value
@@ -1587,6 +1886,13 @@ if prompt := st.chat_input("Plan your trip..."):
     # Generate response based on the extracted information
     with chat_col:
         with st.chat_message("assistant"):
+            # Show loading animation only during response generation
+            loading_placeholder = st.empty()
+            loading_placeholder.markdown('<div class="loading-dots" style="display: inline-block;">Thinking</div>', unsafe_allow_html=True)
+            
             response = generate_response(prompt, st.session_state.travel_info)
+            
+            # Clear loading animation and show response
+            loading_placeholder.empty()
             st.markdown(response)
             st.session_state.messages.append({"role": "assistant", "content": response})
