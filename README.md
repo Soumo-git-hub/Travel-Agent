@@ -2,6 +2,13 @@
 
 An intelligent travel planning assistant powered by AI that helps users create personalized travel itineraries. The app uses advanced language models and real-time data to provide comprehensive travel recommendations.
 
+🔗 **Live Demo**: [Travel Agent App](https://soumo-travel-agent-app.streamlit.app)
+
+## Screenshot
+<p align="center">
+  <img src="AI Agent.png" alt="Travel Agent Screenshot" width="800"/>
+</p>
+
 ## Table of Contents
 - [Features](#features)
 - [Technologies Used](#technologies-used)
