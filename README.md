@@ -2,8 +2,6 @@
 
 An agentic travel planner that functions as a hyper-personalization engine, designed to automate and elevate the travel planning experience. This project showcases a tool-augmented agent built with LangChain that leverages a RAG pipeline to create deeply personalized itineraries, cutting user research and planning time by over 80%.
 
-🔗 **Live Demo**: [Travel Agent App](https://soumo-travel-agent-app.streamlit.app)
-
 ## Screenshot
 <p align="center">
   <img src="./AI%20Agent.png" alt="Travel Agent Screenshot" width="800"/>
